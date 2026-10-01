@@ -13,7 +13,8 @@
 //   --training-camp <id>    指定活动 ID
 //   --work-dir <path>       指定作品目录（跳过候选扫描）
 //   --work-name <name>      指定作品名（≤30 字符）
-//   --git-url <url>         覆盖 git clone 地址（会另行做示例仓库红线检查）
+//   --git-url <url>         覆盖 git clone 地址；可传 ssh 或 https（目录无 .git/origin 时用于自动
+//                           init+强推，见下）；已建仓且 URL 有变时会另行做示例仓库红线检查
 //   --git-branch <name>     覆盖 git 分支（远端存在性由后端兜底校验）
 //   --region <r>            hcloud 区域（默认 cn-north-4）
 //   --hcloud <exe>          hcloud 可执行文件路径
@@ -68,7 +69,9 @@ const HELP = `cli.mjs — ICT 大赛作品提交 · 交互式 CLI
   --training-camp <id>    指定活动 ID
   --work-dir <path>       指定作品目录（跳过候选扫描）
   --work-name <name>      指定作品名（≤30 字符）
-  --git-url <url>         覆盖 git clone 地址（会另行做示例仓库红线检查）
+  --git-url <url>         覆盖 git clone 地址；可传 ssh 或 https（如 git@gitcode.com:ns/repo.git）。
+                          作品目录无 .git/origin 时，用该地址自动 git init+提交+强制推送，
+                          随后把 origin 改回 https://… .git
   --git-branch <name>     覆盖 git 分支（远端存在性由后端兜底校验）
   --region <r>            hcloud 区域（默认 cn-north-4）
   --hcloud <exe>          hcloud 可执行文件路径
@@ -79,8 +82,8 @@ const HELP = `cli.mjs — ICT 大赛作品提交 · 交互式 CLI
 
 环境/作品要求:
   - 环境必须已配置好 \`hcloud\` 命令，或提供 \`--hcloud 可执行文件路径\` 选项。
-  - 作品目录必须配置好git仓库，并已添加git远程仓库。
-  - (似乎ICT官方不会检查git仓库是否存在，只有有个git远程地址即可)
+  - 作品目录建议配置好 git 仓库与 git 远程仓库；若无 .git/无 origin，可在选目录步骤提供
+    git 地址（ssh/https），CLI 会自动初始化并强制推送到该仓库（凭证交给 git 自身）。
 
 退出码: 0=成功; 1=失败/取消; 2=参数错误`;
 
@@ -241,6 +244,17 @@ function firstMatch(stdout, re, group = 1) {
 
 // ===== 步骤实现 =====
 
+// ssh git 地址 → https 形态（scp 式或 ssh:// 协议式；无法识别返回 null）。
+// 仅用于把用户提供的 ssh --git-url 与 origin 的 https 形态对齐，避免 Step 3 误判。
+function sshToHttps(url) {
+  if (typeof url !== "string") return null;
+  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+)$/);
+  if (m && m[2].endsWith(".git")) return `https://${m[1]}/${m[2]}`;
+  m = url.match(/^ssh:\/\/(?:[^@\s/]+@)?([^/\s]+)\/(\S+)$/);
+  if (m && m[2].endsWith(".git")) return `https://${m[1]}/${m[2]}`;
+  return null;
+}
+
 // Step 2 辅助：git 红线检查（读 workDir origin + A3 判定）
 async function pickWorkDir() {
   let dir = FLAGS.workDir ? path.resolve(FLAGS.workDir) : null;
@@ -272,7 +286,43 @@ async function pickWorkDir() {
       const safeUrl = firstMatch(chk.stdout, /#gitUrl=(\S+)/);
       return { workDir: dir, safeUrl };
     }
-    relay(chk.stderr);
+
+    // 目录无 .git（#gitAbsent=1）或无 origin（#gitNoOrigin=1）：允许提供 git 地址自动建仓强推
+    if (/#gitAbsent=1/.test(chk.stdout) || /#gitNoOrigin=1/.test(chk.stdout)) {
+      relay(chk.stderr);
+      let remote = FLAGS.gitUrl;
+      if (!remote) {
+        if (FLAGS.nonInteractive) {
+          fail("作品目录无 .git/无 origin，非交互模式需用 --git-url 提供 git 地址（ssh/https）。");
+        }
+        remote = await ask(
+          "请输入 git 地址（ssh/https，如 git@gitcode.com:ns/repo.git），将自动初始化并强制推送；留空则重新选择目录",
+          "",
+        );
+      }
+      if (remote) {
+        console.error(`正在初始化并强制推送到：${remote}`);
+        const init = runScript("init-git-remote.mjs", [dir, "--remote", remote], 300000);
+        relay(init.stderr);
+        if (init.code === 0 && /#pushed=1/.test(init.stdout)) {
+          const chk2 = runScript("check-ict-git-repo.mjs", [dir], 30000);
+          if (chk2.code === 0 && /#allowed=1/.test(chk2.stdout)) {
+            const safeUrl = firstMatch(chk2.stdout, /#gitUrl=(\S+)/);
+            FLAGS.gitUrl = safeUrl; // 归一为 https，避免 Step 3 对 ssh 地址误判
+            return { workDir: dir, safeUrl };
+          }
+          relay(chk2.stderr);
+          if (/#exampleRepo=1/.test(chk2.stdout)) {
+            fail("推送到的仓库命中平台示例仓库红线，不能作为赛题作品提交，请重新选择作品目录。");
+          }
+        } else {
+          console.error("git 初始化/推送失败。");
+        }
+      }
+    } else {
+      relay(chk.stderr);
+    }
+
     if (FLAGS.nonInteractive) fail("git 红线检查未通过，无法继续。");
     if (!(await confirm("是否重新选择作品目录？", true))) fail("已取消。");
     dir = null;
@@ -428,6 +478,8 @@ async function main() {
 
   // ---- Step 3：Git 信息与作品名 ----
   console.error("\n=== Step 3/4 · Git 仓库信息与作品名 ===");
+  // 用户可能用 ssh 形态提供 --git-url；此处归一为 https 形态再与 safeUrl 比对/覆盖
+  if (FLAGS.gitUrl) FLAGS.gitUrl = sshToHttps(FLAGS.gitUrl) || FLAGS.gitUrl;
   let gitUrl = FLAGS.gitUrl;
   let gitBranch = FLAGS.gitBranch;
   if (!gitUrl || !gitBranch) {

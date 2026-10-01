@@ -11,7 +11,7 @@ description: |
   Do NOT use for judging itself, viewing scores/ranking, or platform browsing without submit intent.
 metadata:
   tags: huawei-cloud,ict-competition,ai-problem,submit,gallery,university operations platform
-  version: 2026.09.25.001
+  version: 2026.09.28.001
 ---
 
 # Publish ICT Competition Work
@@ -43,7 +43,8 @@ Step 0 (domainID, STS creds) → Step 1 (problemId, trainingCampId, window) → 
 | 1 | `list-problems.mjs [--creds-file <json>]` | `#problem <n> <problemId> <trainingCampId> <name> [window=… status=…]` | exit 1（`#none`/非 200）→ 提示无可用 AI 赛题 |
 | 1 | `check-competition-window.mjs --start <所选赛题 startsAt> --end <endsAt>` | `#window=open remainingDays=<n>` | exit 1（`#window=closed reason=before/after`）→ 停止，告知窗口起止 |
 | 2 | `scan-workdirs.mjs --dir <workRoot>` | `#candidate <n> <abs>`（workspace=一级子目录 + 项目递归命中并集；direct=根本身）或 `#none`（exit 0，转手动输入） | exit 2=参数错误 |
-| 2 | `check-ict-git-repo.mjs <workDir>` | `#gitUrl=<https://… .git>` `#allowed=1` | exit 1= `#exampleRepo=1`（示例仓库，重选目录）/ `#gitAbsent=1`（非 git 仓库）/ `#error=1`（读取或 A3 失败） |
+| 2 | `check-ict-git-repo.mjs <workDir>` | `#gitUrl=<https://… .git>` `#allowed=1` | exit 1= `#exampleRepo=1`（示例仓库，重选目录）/ `#gitAbsent=1`（非 git 仓库）/ `#gitNoOrigin=1`（无 origin 远程）/ `#error=1`（URL 不合规或 A3 失败） |
+| 2 | `init-git-remote.mjs <workDir> --remote <ssh\|https> [--branch <name>] [--dry-run]` | `#gitUrl=<https… .git>` `#gitBranch=<分支>` `#pushed=1`（`git init` 过附 `#initialized=1`；`--dry-run` 出 `#dryRun=1`） | exit 1= `#error=1 reason=<init\|commit\|remote\|push\|set-url>`（stderr 附原始输出）；exit 2=URL/参数不合法（须 ssh 或 https、`.git` 结尾、无内嵌凭证） |
 | 3 | `strip-git-credential.mjs "<rawUrl>"` | stdout=安全 URL（https:// 开头、.git 结尾、无 `@`） | 非 https/非 .git/含 `@` → 停止 |
 | 3 | `read-git-info.mjs <workDir>` | `#gitUrl=<https://… .git>` `#gitBranch=<分支>`（已核对远端确有该分支） | exit 1=非 git 仓库 / 无 origin / detached HEAD / URL 不合规 / `#branchAbsent=1`（远端不存在该分支——本地/远端分支名分叉，转述 stderr 指引：`git push -u origin <branch>` 或改用远端已有分支；网络/凭证原因无法核对时 stderr 警告但不拦截） |
 | 3 | `ensure-gitcode-credential.mjs` | `#credential=found`（有凭证）或 `#credential=missing`（无凭证，走 OAuth） | exit 0；无手动备选 |
@@ -89,8 +90,8 @@ Step 0 (domainID, STS creds) → Step 1 (problemId, trainingCampId, window) → 
 3. 手动输入兜底：候选不符 / `#none` / 指定任意目录，均请用户输入（`#none` 不拦截、不擅自指定）。
 4. **git 红线检查（提交之初即查，接口判定）**：对用户确认的 `workDir` 跑 `check-ict-git-repo.mjs <workDir>`（内部读 `.git` origin → 调 A3 git-check，判定规则以**后端配置**为准）：
    - `#exampleRepo=1` → 脚本 stderr 已给出完整红线提示，**转述并且唯一处置是回到本步骤请用户重新选择「赛题作品目录」**；禁止继续后续步骤，禁止 fork、禁止拆分/另推示例仓库内容为个人仓库提交（红线规则见 [ict-error-codes.md](references/ict-error-codes.md) `GIT_URL_EXAMPLE_REPO`）。
-   - `#gitAbsent=1` → 提示该目录非 git 仓库（无 `.git`）：赛题作品须提交到自己的 git 远程仓库；请用户改选已建仓目录。
-   - `#error=1` → 提示本地读取/A3 请求失败，按 stderr 排查后重试（不阻塞用户换目录）。
+   - `#gitAbsent=1` / `#gitNoOrigin=1` → 该目录无 `.git` 或 git 仓库无 `origin`。**优先询问用户提供一个 git 地址（ssh/https，如 `git@gitcode.com:<ns>/<repo>.git`）**：有则调 `init-git-remote.mjs <workDir> --remote <url>`（自动 `git init`/`remote add`/`git add -A`+提交/`git push -u --force`，成功后把 origin 改回 https），随后重跑 `check-ict-git-repo.mjs` 复核；复核 `#exampleRepo=1` → 红线停止并回 Step 2。用户不留地址 / 非交互无 `--git-url` → 请用户改选已建仓目录。
+   - `#error=1` → 提示本地 URL 不合规或 A3 请求失败，按 stderr 排查后重试（不阻塞用户换目录）。
    - `#allowed=1` → 记录 `safeUrl = #gitUrl`，进入 Step 3。
 5. 路径校验：存在且为目录即可作 `workDir`；命名与 git 信息在 Step 3。
 
