@@ -15,9 +15,10 @@
 //     #gitUrl=<https://… .git>   #allowed=1   （可提交；gitUrl 为剥离凭证后的安全 URL）
 //   exit 1:
 //     #gitAbsent=1               该目录无 .git / 非 git 仓库（提示改选已建远程仓库的目录）
-//     #gitNoOrigin=1             有 .git 但未配置 origin 远程（可由 init-git-remote.mjs 自动建仓强推）
+//     #gitNoOrigin=1             有 .git 但未配置 origin 远程（本地扩展：可由 init-git-remote.mjs 自动建仓强推；
+//                                上游 2026-09-30 起并入 #error=1，本仓库保留该分支供本地 CLI 使用）
 //     #exampleRepo=1 frag=<host/path> gitUrl=<url>  （命中示例仓库红线，提示重选目录）
-//     #error=1 …                 其他失败（URL 不合规 / A3 请求失败等）
+//     #error=1 …                 其他失败（git 读取失败 / A3 请求失败等）
 //   exit 2: 参数错误
 
 import { execFileSync } from "node:child_process";
@@ -70,12 +71,20 @@ let rawUrl;
 try {
   rawUrl = git(["remote", "get-url", "origin"]);
 } catch (e) {
-  console.log("#gitNoOrigin=1");
-  console.error(
-    `ℹ️ ${workDir} 的 git 仓库未配置 origin 远程（或读取失败）。` +
-    `\n   可提供 git 地址（ssh/https，如 git@gitcode.com:<ns>/<repo>.git），由 init-git-remote.mjs 自动` +
-    `\n   git init / remote add / 提交 / 强制推送，并把 origin 改回 https；无需重新选择目录。`,
-  );
+  // 本地扩展（上游已并入 #error=1）：区分「无 origin」与「读取失败」，
+  // 供本地 CLI --git-url 走 init-git-remote.mjs 自动建仓强推。
+  const msg = (e.stderr?.toString() || e.message || "").trim();
+  if (/No such remote|does not appear to be a git repository|no such remote/i.test(msg) || !msg) {
+    console.log("#gitNoOrigin=1");
+    console.error(
+      `ℹ️ ${workDir} 的 git 仓库未配置 origin 远程（或读取失败）。` +
+        `\n   可提供 git 地址（ssh/https，如 git@gitcode.com:<ns>/<repo>.git），由 init-git-remote.mjs 自动` +
+        `\n   git init / remote add / 提交 / 强制推送，并把 origin 改回 https；无需重新选择目录。`,
+    );
+    process.exit(1);
+  }
+  console.log("#error=1");
+  console.error(`❌ 读取 git origin 失败：${workDir}\n${msg}`);
   process.exit(1);
 }
 

@@ -2,14 +2,15 @@
 // cli.mjs — ICT 大赛·实验赛题平台作品提交 · 面向人类的交互式 CLI
 //
 // 本文件是「编排层」：不重写业务逻辑，通过子进程调用同目录 scripts/*，
-// 解析其 `#key=value` / `#problem` / `#candidate` stdout 契约，交互式走完
-// Step 0→4（解析 Domain/STS → 选赛题 → 选作品目录 → git 信息/作品名 → 提交）。
+// 解析其 `#key=value` / `#problem` / `#selected` / `#candidate` stdout 契约，交互式走完
+// Step 0→4（解析 Domain/STS → 选赛题并锁定目标 → 选作品目录 → git 信息/作品名 → 提交）。
 //
 // 用法:
 //   node cli.mjs [选项]
 //
 // 选项（可选，缺省全部交互式提问）:
-//   --problem-id <id>       指定赛题（配合 --training-camp 可跳过列表选择）
+//   --problem-id <id>       指定赛题 ID（须配 --training-camp）
+//   --problem-name <name>   指定赛题名（配合 --problem-id 时用于目标锁定与交叉校验）
 //   --training-camp <id>    指定活动 ID
 //   --work-dir <path>       指定作品目录（跳过候选扫描）
 //   --work-name <name>      指定作品名（≤30 字符）
@@ -46,6 +47,7 @@ const INVOCATION_CWD = process.cwd();
 // ===== 选项解析 =====
 const FLAGS = {
   problemId: null,
+  problemName: null,
   trainingCamp: null,
   workDir: null,
   workName: null,
@@ -56,6 +58,7 @@ const FLAGS = {
   credsFile: null,
   yes: false,
   nonInteractive: false,
+  forceSelect: false,
   help: false,
 };
 
@@ -65,7 +68,8 @@ const HELP = `cli.mjs — ICT 大赛作品提交 · 交互式 CLI
   node cli.mjs [选项]
 
 选项（缺省全部交互式提问）:
-  --problem-id <id>       指定赛题（配合 --training-camp 可跳过列表选择）
+  --problem-id <id>       指定赛题 ID（须配 --training-camp；赛题列表行已不再输出 ID）
+  --problem-name <name>   指定赛题名（配合 --problem-id 时用于目标锁定与交叉校验，推荐）
   --training-camp <id>    指定活动 ID
   --work-dir <path>       指定作品目录（跳过候选扫描）
   --work-name <name>      指定作品名（≤30 字符）
@@ -77,8 +81,13 @@ const HELP = `cli.mjs — ICT 大赛作品提交 · 交互式 CLI
   --hcloud <exe>          hcloud 可执行文件路径
   --creds-file <json>     复用已有 sts-creds.json（跳过 Step 0 的 STS 生成）
   --yes                   自动确认所有确认项
-  --non-interactive       非交互（必须提供 --problem-id/--training-camp/--work-dir）
+  --non-interactive       非交互（必须提供 --problem-id、--training-camp，以及 --work-dir）
   -h, --help              显示帮助
+
+目标锁定:
+  Step 1 选定赛题后即写目标锁（本次运行唯一目标），ID/活动/赛题名一律取自脚本回传的
+  #selected 结构化行，禁止手抄；后续任何失败都不自动改投其他赛题。改投须重新选择并经
+  用户确认（脚本层加 --force）。
 
 环境/作品要求:
   - 环境必须已配置好 \`hcloud\` 命令，或提供 \`--hcloud 可执行文件路径\` 选项。
@@ -101,6 +110,7 @@ function parseArgs(argv) {
       case "-h":
       case "--help": FLAGS.help = true; break;
       case "--problem-id": FLAGS.problemId = next(); break;
+      case "--problem-name": FLAGS.problemName = next(); break;
       case "--training-camp": FLAGS.trainingCamp = next(); break;
       case "--work-dir": FLAGS.workDir = next(); break;
       case "--work-name": FLAGS.workName = next(); break;
@@ -213,21 +223,36 @@ function runPy(scriptName, args, timeoutMs = 0) {
 }
 
 // ===== stdout 契约解析 =====
+// `#problem <n> <name> [window=… status=…]`（2026-09-30 起**不含 ID**，ID 只经 `#selected` 取得）
 function parseProblems(stdout) {
   const out = [];
   for (const line of stdout.split(/\r?\n/)) {
-    const m = line.match(/^#problem\s+(\d+)\s+(\S+)\s+(\S*)\s+(.*)$/);
+    const m = line.match(/^#problem\s+(\d+)\s+(.*)$/);
     if (!m) continue;
-    let rest = m[4];
+    let rest = m[2];
     let win = null;
     const wm = rest.match(/\s+window=(\S+)\s+status=(\S+)\s*$/);
     if (wm) {
       win = { window: wm[1], status: wm[2] };
       rest = rest.slice(0, wm.index);
     }
-    out.push({ n: Number(m[1]), problemId: m[2], trainingCampId: m[3], name: rest.trim(), win });
+    out.push({ n: Number(m[1]), name: rest.trim(), win });
   }
   return out;
+}
+// `#selected number=<n> problemId=<pid> trainingCampId=<camp> name=<name>`（name 为末字段，可缺省）
+function parseSelected(stdout) {
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = line.match(/^#selected\s+(.*)$/);
+    if (!m) continue;
+    const t = m[1];
+    const num = firstMatch(t, /number=(\S+)/);
+    const pid = firstMatch(t, /problemId=(\S+)/);
+    const camp = firstMatch(t, /trainingCampId=(\S+)/);
+    const name = (t.match(/name=(.*)$/) || [, ""])[1].trim();
+    if (pid) return { n: Number(num) || 0, problemId: pid, trainingCampId: camp, name };
+  }
+  return null;
 }
 function parseCandidates(stdout) {
   const out = [];
@@ -426,8 +451,11 @@ async function main() {
     console.error("✅ STS 临时凭证已生成。");
   }
 
-  // ---- Step 1：赛题发现 ----
+  // ---- Step 1：赛题发现 + 目标锁定（#selected，禁止手抄 ID） ----
   console.error("\n=== Step 1/4 · 赛题发现 ===");
+  // 目标锁：本次运行唯一目标。用 TMP 下的固定路径（随进程清理），并显式传给
+  // list-problems（写锁）与 build-submit-params（校验锁），两边路径必须一致。
+  const lockFile = path.join(TMP, ".ict-target.json");
   let problems = [];
   const lp = runScript("list-problems.mjs", ["--creds-file", credsFile], 30000);
   if (lp.code === 0) problems = parseProblems(lp.stdout);
@@ -437,30 +465,78 @@ async function main() {
     console.error("⚠️ 赛题列表获取失败，改用命令行指定的赛题。");
   }
 
-  let problemId = FLAGS.problemId;
-  let trainingCampId = FLAGS.trainingCamp;
-  if (problemId && !trainingCampId) {
-    const hit = problems.find((p) => p.problemId === problemId);
-    if (hit) trainingCampId = hit.trainingCampId;
-    else fail("指定 --problem-id 未在赛题列表中找到，请同时提供 --training-camp。");
-  }
-  if (!problemId) {
-    if (FLAGS.nonInteractive) fail("非交互模式必须提供 --problem-id。");
-    if (!problems.length) fail("当前无可用 AI 赛题。");
+  if (problems.length) {
     console.error("可用 AI 赛题：");
     for (const p of problems) console.error(`  ${p.n}) ${p.name}${p.win?.status ? `（${p.win.status}）` : ""}`);
+  }
+
+  let problemId = FLAGS.problemId || "";
+  let trainingCampId = FLAGS.trainingCamp || "";
+  let problemName = FLAGS.problemName || "";
+
+  // 两种入口：
+  //  A. 交互：展示全部赛题 → 用户回序号 → `list-problems.mjs --select <n>` 写目标锁并回传 #selected
+  //  B. 命令行：--problem-id 必须配 --training-camp；若再给 --problem-name 且列表可用，
+  //     则用 --select-name 复核并写锁（推荐，可享「ID↔赛题名↔活动」交叉校验）
+  let targetNumber = 0;
+  let selectArgs = null;
+  if (problemId) {
+    if (!trainingCampId) {
+      fail("--problem-id 需同时提供 --training-camp（赛题列表行已不再输出 problemId，无法反查活动）。");
+    }
+    if (problems.length && problemName) {
+      selectArgs = ["--select-name", problemName, "--creds-file", credsFile, "--lock-file", lockFile];
+    } else {
+      console.error("⚠️ 未提供 --problem-name（或赛题列表不可用）：跳过目标锁定与赛题名交叉校验，仅用命令行传入的 problemId/trainingCampId。");
+    }
+  } else {
+    if (FLAGS.nonInteractive) fail("非交互模式必须提供 --problem-id 与 --training-camp。");
+    if (!problems.length) fail("当前无可用 AI 赛题。");
     while (true) {
       const ans = await ask("请选择赛题序号", "1");
       const hit = problems.find((p) => p.n === Number(ans));
-      if (hit) { problemId = hit.problemId; trainingCampId = hit.trainingCampId; break; }
+      if (hit) { targetNumber = hit.n; break; }
       console.error("序号无效，请重试。");
     }
+    selectArgs = ["--select", String(targetNumber), "--creds-file", credsFile, "--lock-file", lockFile];
   }
-  console.error(`已选择赛题：problemId=${problemId} trainingCampId=${trainingCampId}`);
+
+  // 目标锁定：由脚本写锁并回传唯一权威的 #selected 结构化行（禁止手抄 ID）
+  if (selectArgs) {
+    while (true) {
+      const args = [...selectArgs];
+      if (FLAGS.forceSelect) args.push("--force");
+      const sel = runScript("list-problems.mjs", args, 30000);
+      const picked = parseSelected(sel.stdout);
+      if (picked) {
+        problemId = picked.problemId;
+        trainingCampId = picked.trainingCampId || trainingCampId;
+        problemName = picked.name || problemName;
+        if (!targetNumber) targetNumber = picked.n;
+        break;
+      }
+      relay(sel.stderr);
+      if (/#selected-locked/.test(sel.stdout)) {
+        const locked = sel.stdout.match(/#selected-locked[^\n]*/)?.[0] || "";
+        if (locked) console.error(locked);
+        if (FLAGS.nonInteractive) fail("目标锁指向其他赛题；非交互模式不会自动改投，请清理目标锁后重试。");
+        if (!(await confirm("目标锁指向其他赛题，是否改投到本次所选赛题？", false))) {
+          fail("已取消（未改投）。禁止静默改投其他赛题。");
+        }
+        FLAGS.forceSelect = true;
+        continue;
+      }
+      if (/#selected-none/.test(sel.stdout)) fail("赛题选择失败：序号越界或名称无匹配，请重新选择。");
+      if (/#selected-ambiguous/.test(sel.stdout)) fail("赛题名匹配到多道题，请改用序号选择。");
+      fail("目标锁定失败（未取得 #selected 结构化行），请检查赛题列表与凭证后重试。");
+    }
+    console.error(`本次目标：序号 ${targetNumber || "?"}／赛题「${problemName}」／problemId=${problemId} — 本步骤起目标即锁定，后续失败不自动改投。`);
+  }
+  console.error(`已选择赛题：problemId=${problemId} trainingCampId=${trainingCampId}${problemName ? ` name=${problemName}` : ""}`);
 
   // 窗口预检（有精确起止则覆盖默认）
   const wArgs = [];
-  const winHit = problems.find((p) => p.problemId === problemId);
+  const winHit = problems.find((p) => p.n === targetNumber);
   if (winHit?.win) {
     const [s, e] = winHit.win.window.split("~");
     if (s && s !== "?") wArgs.push("--start", s);
@@ -524,14 +600,14 @@ async function main() {
 
   // ---- Step 4：提交 ----
   console.error("\n=== Step 4/4 · 提交 ===");
-  console.error(`即将提交：作品「${workName}」→ 赛题 ${problemId}（活动 ${trainingCampId}）`);
+  console.error(`即将提交：作品「${workName}」→ 赛题 ${problemId}${problemName ? `「${problemName}」` : ""}（活动 ${trainingCampId}）`);
   console.error(`  gitUrl=${gitUrl}`);
   console.error(`  gitBranch=${gitBranch}`);
   if (!(await confirm("确认提交？", true))) fail("已取消。");
 
   const paramsFile = path.join(TMP, "ict-params.json");
   while (true) {
-    const bp = runScript("build-submit-params.mjs", [
+    const bpArgs = [
       "--out", paramsFile,
       "--problem-id", problemId,
       "--training-camp", trainingCampId,
@@ -539,8 +615,17 @@ async function main() {
       "--git-url", gitUrl,
       "--git-branch", gitBranch,
       "--creds", credsFile,
-    ], 15000);
-    if (bp.code !== 0) { relay(bp.stderr); fail("装配提交参数失败。"); }
+      "--lock-file", lockFile,
+    ];
+    // --problem-name 为上游必填（目标锁一致性 + A0 ID↔赛题名/活动交叉校验）；
+    // 仅在「列表不可用且未提供 --problem-name」的逃生路径下省略。
+    if (problemName) bpArgs.push("--problem-name", problemName);
+    const bp = runScript("build-submit-params.mjs", bpArgs, 20000);
+    if (bp.code !== 0) {
+      relay(bp.stderr);
+      const msg = bp.stdout.match(/(PROBLEM_[A-Z_]+|GIT_[A-Z_]+)/)?.[1] || "";
+      fail(`装配提交参数失败${msg ? `（${msg}）` : ""}：目标锁定后本次运行不再改投其他赛题；如需改投，请重新运行并回 Step 1 重新选择。`);
+    }
 
     const sub = runScript("submit-ict-work.mjs", [paramsFile], 60000);
     if (/#status=201/.test(sub.stdout) || /submissionId=/.test(sub.stdout)) {

@@ -35,6 +35,8 @@
 ```
 1. 从 api.mjs 输出取 #status 与响应体 → 提取 code/message/httpStatus。
 2. 查上表：可恢复（改参数/窗口/换幂等键/重试）→ 按表处置后重提；
-   ALREADY_PASSED / NOT_REGISTERED / WINDOW_EXPIRED / 政策类 → 告知用户并停止，不自动重试。
+   ALREADY_PASSED / NOT_REGISTERED / WINDOW_EXPIRED / 政策类 → 告知用户并停止本次提交流程，不自动重试。
 3. 未识别错误码 → 原样呈现给用户并报障。
 ```
+
+**铁律（2026-09-30）：任何失败码都不触发自动换题。** 目标赛题在 Step 1 `--select` 选定后即锁定（目标锁 `.ict-target.json`）；任何 A1 业务拒绝（含窗口/报名/赛道/终态）一律只转述用户 + 停止本次提交，**禁止擅自改投其他赛题**。用户确需改投 → 回 Step 1 重新 `list-problems.mjs --select`（`#selected-locked` 时加 `--force`）并经用户明确确认后才可继续——否则 `build-submit-params.mjs` 的目标锁一致性校验会拒绝构建参数。锁超过 STS 凭证有效期（900s）自动作废，跨次独立提交无需 `--force`。
