@@ -15,7 +15,8 @@
 //
 // --remote 支持:
 //   git@<host>:<ns>/<repo>.git          （scp 式 ssh）
-//   ssh://git@<host>/<ns>/<repo>.git    （ssh:// 协议式）
+//   ssh://git@<host>/<ns>/<repo>.git    （ssh:// 协议式，可带 :端口）
+//   git://<host>/<ns>/<repo>.git        （git:// 协议式）
 //   https://<host>/<ns>/<repo>.git      （已是 https，原样使用）
 //   其余（非 .git 结尾 / 含内嵌凭证 / 非上述形态）→ 参数错误
 //
@@ -44,7 +45,8 @@ const HELP = `init-git-remote.mjs — 无 .git/无 origin 时自动初始化并�
 
 --remote 支持:
   git@<host>:<ns>/<repo>.git          （scp 式 ssh）
-  ssh://git@<host>/<ns>/<repo>.git    （ssh:// 协议式）
+  ssh://git@<host>/<ns>/<repo>.git    （ssh:// 协议式，可带 :端口）
+  git://<host>/<ns>/<repo>.git        （git:// 协议式）
   https://<host>/<ns>/<repo>.git      （已是 https，原样使用）
 
 行为:
@@ -92,11 +94,14 @@ if (!existsSync(workDir)) { console.error(`❌ workDir 不存在: ${workDir}`); 
 // ---- URL 校验与 https 派生 ----
 function normalizeRemote(url) {
   // scp 式: git@host:ns/repo.git
-  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+)$/);
-  if (m && m[2].endsWith(".git")) return { remote: url, https: `https://${m[1]}/${m[2]}` };
-  // ssh:// 协议式: ssh://git@host/ns/repo.git
-  m = url.match(/^ssh:\/\/(?:[^@\s/]+@)?([^/\s]+)\/(\S+)$/);
-  if (m && m[2].endsWith(".git")) return { remote: url, https: `https://${m[1]}/${m[2]}` };
+  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+\.git)$/);
+  if (m) {
+    const pathPart = m[2].replace(/^[^@\s/]*@/, ""); // 顺带剥离 ssh 形态里的 user:pass@
+    return { remote: url, https: `https://${m[1]}/${pathPart}` };
+  }
+  // ssh:// 协议式: ssh://git@host[:port]/ns/repo.git；git:// 协议式: git://host/ns/repo.git
+  m = url.match(/^(?:ssh|git):\/\/(?:[^@\s/]+@)?([^/\s:]+)(?::\d+)?\/(\S+\.git)$/);
+  if (m) return { remote: url, https: `https://${m[1]}/${m[2]}` };
   // 已是 https
   if (/^https:\/\/[^\s@]+\.git$/.test(url)) return { remote: url, https: url };
   return null;

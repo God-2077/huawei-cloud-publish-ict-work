@@ -48,8 +48,8 @@ Step 0 (domainID, STS creds) → Step 1 (problemId, trainingCampId, window) → 
 | 2 | `scan-workdirs.mjs --dir <workRoot>` | `#candidate <n> <abs>`（workspace=一级子目录 + 项目递归命中并集；direct=根本身）或 `#none`（exit 0，转手动输入） | exit 2=参数错误 |
 | 2 | `check-ict-git-repo.mjs <workDir>` | `#gitUrl=<https://… .git>` `#allowed=1` | exit 1= `#exampleRepo=1`（示例仓库，重选目录）/ `#gitAbsent=1`（非 git 仓库）/ `#gitNoOrigin=1`（有 `.git` 无 origin，可由 `init-git-remote.mjs` 自动建仓强推——**本地扩展**）/ `#error=1`（读取或 A3 失败） |
 | 2 | `init-git-remote.mjs <workDir> --remote <ssh\|https> [--branch <name>] [--dry-run]` | `#gitUrl=<https… .git>` `#gitBranch=<分支>` `#pushed=1`（`git init` 过附 `#initialized=1`；`--dry-run` 出 `#dryRun=1`） | exit 1= `#error=1 reason=<init\|commit\|remote\|push\|set-url>`（stderr 附原始输出）；exit 2=URL/参数不合法（须 ssh 或 https、`.git` 结尾、无内嵌凭证）；**本地扩展**（上游无此脚本） |
-| 3 | `strip-git-credential.mjs "<rawUrl>"` | stdout=安全 URL（https:// 开头、.git 结尾、无 `@`） | 非 https/非 .git/含 `@` → 停止 |
-| 3 | `read-git-info.mjs <workDir>` | `#gitUrl=<https://… .git>` `#gitBranch=<分支>`（已核对远端确有该分支） | exit 1=非 git 仓库 / 无 origin / detached HEAD / URL 不合规 / `#branchAbsent=1`（远端不存在该分支——本地/远端分支名分叉，转述 stderr 指引：`git push -u origin <branch>` 或改用远端已有分支；网络/凭证原因无法核对时 stderr 警告但不拦截） |
+| 3 | `strip-git-credential.mjs "<rawUrl>"` | stdout=安全 URL（https:// 开头、.git 结尾、无 `@`；ssh/git 形态自动转为 https） | 非 https/非 .git/含 `@` 且非 ssh/git 形态 → 停止 |
+| 3 | `read-git-info.mjs <workDir>` | `#gitUrl=<https://… .git>`（origin 为 ssh/git 协议时**自动派生 https 形态**）`#gitBranch=<分支>`（已核对远端确有该分支） | exit 1=非 git 仓库 / 无 origin / detached HEAD / URL 不合规（非 ssh/git 且非 https）/ `#branchAbsent=1`（远端不存在该分支——本地/远端分支名分叉，转述 stderr 指引：`git push -u origin <branch>` 或改用远端已有分支；网络/凭证原因无法核对时 stderr 警告但不拦截） |
 | 3 | `ensure-gitcode-credential.mjs` | `#credential=found`（有凭证）或 `#credential=missing`（无凭证，走 OAuth） | exit 0；无手动备选 |
 | 3 | `gitcode-oauth.ensure.mjs --start` | `#oauth=ready`（有 token）/ `#oauth=started session_id=<id> login_url=<url>`（stdout 立即返回，二维码走 stderr） | 缺失 `#oauth=absent` exit 1；失败 `#oauth=failed reason=…` exit 1 |
 | 3 | `gitcode-oauth.ensure.mjs --wait <session_id> [--timeout <秒>]` | `#oauth=done`（token 已写 `~/.gitcode/auth.toml`） | `#oauth=failed reason=timeout\|finish\|…` exit 1 |
@@ -108,7 +108,7 @@ Step 0 (domainID, STS creds) → Step 1 (problemId, trainingCampId, window) → 
 ### Step 3: Git Repository Info & Work Name
 
 1. **红线复核（URL 可能变化时）**：若 `#allowed=1` 后 gitUrl 无变化（Step 2 已判定放行）可跳过；若用户手工改过 origin / 输入了自定义 URL，先重跑 `check-ict-git-repo.mjs <workDir>` 复核（同 Step 2.4 判定，命中示例仓库 → 回 Step 2）。
-2. `read-git-info.mjs <workDir>` 一步取 gitUrl/gitBranch（含 git 仓库自检 + 凭证剥离 + **远端分支核对**，契约见上表）；其输出的 gitUrl 与 `safeUrl` 比对，不一致以 `read-git-info` 为准并重跑 A3 判定。`#branchAbsent=1` → 转述 stderr 指引（先推送该分支或改用远端已有分支），修复后重跑本步骤。
+2. `read-git-info.mjs <workDir>` 一步取 gitUrl/gitBranch（含 git 仓库自检 + 凭证剥离 + **远端分支核对**，契约见上表）；其输出的 gitUrl 与 `safeUrl` 比对，不一致以 `read-git-info` 为准并重跑 A3 判定。**origin 为 ssh/git 协议（`git@host:ns/repo.git`、`ssh://git@host/ns/repo.git`、`git://host/ns/repo.git`）时自动派生成 `https://host/ns/repo.git` 提交，无需用户手改 origin 或重输地址**（远端分支核对仍用原 origin，ssh 凭证照旧生效）。`#branchAbsent=1` → 转述 stderr 指引（先推送该分支或改用远端已有分支），修复后重跑本步骤。
 3. **凭证排查**：`ensure-gitcode-credential.mjs`；无凭证走 `gitcode-oauth.ensure.mjs` 两阶段授权（`--start`→`--wait`，契约见上表）——**授权链接/二维码原样展示给用户**（禁止 agent 内置浏览器代开）。**若 read-git-info 已能读到 origin**（已有凭证）可跳过 OAuth。
 4. **命名**：`extract-workname.mjs <workDir>`。`source=dirname` 时 agent 可合成/修改（<30 字符）。
 

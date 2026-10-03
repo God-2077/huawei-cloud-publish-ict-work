@@ -107,6 +107,7 @@ scripts/                原子脚本（各自可独立调用，多数支持 --he
 
 - 提交身份由 **APIG 网关注入 `X-Domain-Id`**，本地以 IAM 自委托 `SELF_VERIFY` 生成 **900s 临时 STS 凭证**；永久 AK/SK 始终留在本地，不会上传。临时凭证落在临时目录，进程退出即清理。
 - `gitUrl` 在提交前经 `strip-git-credential.mjs` 剥离 `user:pass@` / `token@` 凭证段，**不会把内嵌凭证提交到平台**。
+- 作品仓库的 `origin` 为 **ssh/git 协议**时，提交前自动派生成 https 形态（`git@gitcode.com:<ns>/<repo>.git` / `ssh://git@…` / `git://…` → `https://gitcode.com/<ns>/<repo>.git`），**无需手工改 origin 或重输地址**；派生只影响提交给平台的 `gitUrl`，本地 `ls-remote` 分支核对仍走原 origin（ssh 凭证照旧生效）。
 - GitCode OAuth 采用本机回调方案（`127.0.0.1:7654`），授权链接与二维码**原样展示给用户**，token 写入 `~/.gitcode/auth.toml`（权限 `0600`）。
 - 仓库内不包含任何硬编码的 AK/SK/Token。
 - 示例/演示仓库命中平台红线不可提交，唯一处置是回到 Step 2 更换作品目录（详见 [`references/ict-error-codes.md`](references/ict-error-codes.md)）。
@@ -119,6 +120,7 @@ scripts/                原子脚本（各自可独立调用，多数支持 --he
 | 找不到 python3/python | 安装 Python 3，或用 `--creds-file` 复用已生成的 `sts-creds.json` |
 | `#exampleRepo=1` | 作品目录命中示例仓库红线，回到 Step 2 更换目录 |
 | `#gitAbsent=1` / `#gitNoOrigin=1` | 目录无 `.git` 或无 origin，用 `--git-url` 提供 git 地址自动初始化推送 |
+| 提示「gitUrl 须为 https:// 开头…」 | 自本版起 **origin 为 ssh/git 协议的地址会自动转为 https**（`git@host:ns/repo.git`、`ssh://git@host[:port]/ns/repo.git`、`git://host/ns/repo.git`），正常不再出现该提示；若仍出现，说明地址不是上述形态（例如本地路径、缺 `.git` 后缀、或含内嵌凭证），请改用 https 地址 |
 | `#selected-locked number=… problemId=…` | 目标锁（`.ict-target.json`，默认在 `--creds-file` 同目录）已指向其他赛题：确认改投才可加 `--force`；锁超过 900s 自动作废，也可直接删除该锁文件 |
 | `--problem-name` 不一致 / `PROBLEM_UNAVAILABLE` | 目标锁或 A0 校验拒绝构建参数：回 Step 1 重新选择赛题，**不要改投到其他赛题** |
 | 提交非 201 | 按 [`references/ict-error-codes.md`](references/ict-error-codes.md) 对应错误码处理 |

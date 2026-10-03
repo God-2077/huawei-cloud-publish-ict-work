@@ -269,14 +269,17 @@ function firstMatch(stdout, re, group = 1) {
 
 // ===== 步骤实现 =====
 
-// ssh git 地址 → https 形态（scp 式或 ssh:// 协议式；无法识别返回 null）。
-// 仅用于把用户提供的 ssh --git-url 与 origin 的 https 形态对齐，避免 Step 3 误判。
+// ssh / git 协议 git 地址 → https 形态（scp 式、ssh:// 协议式、git:// 协议式；无法识别返回 null）。
+// 用途：① 把用户提供的 ssh --git-url 与 origin 的 https 形态对齐；② origin 本身是 ssh 时自动派生 https 提交。
 function sshToHttps(url) {
   if (typeof url !== "string") return null;
-  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+)$/);
-  if (m && m[2].endsWith(".git")) return `https://${m[1]}/${m[2]}`;
-  m = url.match(/^ssh:\/\/(?:[^@\s/]+@)?([^/\s]+)\/(\S+)$/);
-  if (m && m[2].endsWith(".git")) return `https://${m[1]}/${m[2]}`;
+  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+\.git)$/);
+  if (m) {
+    const pathPart = m[2].replace(/^[^@\s/]*@/, ""); // 顺带剥离 ssh 形态里的 user:pass@
+    return `https://${m[1]}/${pathPart}`;
+  }
+  m = url.match(/^(?:ssh|git):\/\/(?:[^@\s/]+@)?([^/\s:]+)(?::\d+)?\/(\S+\.git)$/);
+  if (m) return `https://${m[1]}/${m[2]}`;
   return null;
 }
 
@@ -355,12 +358,15 @@ async function pickWorkDir() {
 }
 
 // Step 3 辅助：对用户自定义 gitUrl 走 A3 免鉴权红线检查
+// ssh/git 形态先自动派生 https（平台只接受 https://… .git），不再直接报「须为 https:// 开头」。
 function checkGitUrlRemote(url) {
-  if (!/^https:\/\/[^\s@]+\.git$/.test(url)) {
-    return { ok: false, reason: "gitUrl 须为 https:// 开头、.git 结尾、且不含内嵌凭证" };
+  const httpsUrl = sshToHttps(url) || String(url).replace(/^(https?:\/\/)[^/@]+@/, "$1");
+  if (httpsUrl !== url) console.error(`ℹ️ gitUrl 为 ssh/git 协议，已自动转为 https 提交：${httpsUrl}`);
+  if (!/^https:\/\/[^\s@]+\.git$/.test(httpsUrl)) {
+    return { ok: false, reason: "gitUrl 须为 https:// 开头、.git 结尾、且不含内嵌凭证（ssh/git 形态会自动转为 https）" };
   }
   const r = runScript("api.mjs", ["POST", "/v1/gallery/competition/git-check",
-    "--prefix", "open-api-guest", "--json", JSON.stringify({ gitUrl: url })], 20000);
+    "--prefix", "open-api-guest", "--json", JSON.stringify({ gitUrl: httpsUrl })], 20000);
   const statusLine = r.stdout.split(/\r?\n/)[0] || "";
   const body = r.stdout.slice(r.stdout.indexOf("\n") + 1);
   let resp = null;
@@ -371,7 +377,7 @@ function checkGitUrlRemote(url) {
   if (resp.data.allowed === false) {
     return { ok: false, reason: `命中平台示例/演示仓库红线（${resp.data.host ?? ""}${resp.data.pathPrefix ?? ""}），不能作为赛题作品提交` };
   }
-  return { ok: true };
+  return { ok: true, gitUrl: httpsUrl };
 }
 
 // Step 3 辅助：GitCode 凭证（缺失时走两阶段 OAuth，原样展示链接+二维码）
@@ -554,7 +560,7 @@ async function main() {
 
   // ---- Step 3：Git 信息与作品名 ----
   console.error("\n=== Step 3/4 · Git 仓库信息与作品名 ===");
-  // 用户可能用 ssh 形态提供 --git-url；此处归一为 https 形态再与 safeUrl 比对/覆盖
+  // 用户可能用 ssh 形态提供 --git-url；此处先归一为 https 形态（提交/红线检查都只认 https）
   if (FLAGS.gitUrl) FLAGS.gitUrl = sshToHttps(FLAGS.gitUrl) || FLAGS.gitUrl;
   let gitUrl = FLAGS.gitUrl;
   let gitBranch = FLAGS.gitBranch;
@@ -562,6 +568,7 @@ async function main() {
     while (true) {
       const gi = runScript("read-git-info.mjs", [workDir], 30000);
       if (gi.code === 0) {
+        // read-git-info 已做 ssh/git→https 自动派生与凭证剥离
         gitUrl = gitUrl || firstMatch(gi.stdout, /#gitUrl=(\S+)/);
         gitBranch = gitBranch || firstMatch(gi.stdout, /#gitBranch=(\S+)/);
         break;
@@ -571,12 +578,24 @@ async function main() {
       if (!(await confirm("修复后重试读取 git 信息？", true))) fail("已取消。");
     }
   }
-  if (FLAGS.gitUrl && FLAGS.gitUrl !== safeUrl) {
+  // 兼容手工/旧脚本传入的 ssh 形态（例如 --git-url 未被上面的分支覆盖时）
+  let gitUrlChanged = false;
+  if (gitUrl) {
+    const httpsGitUrl = sshToHttps(gitUrl);
+    if (httpsGitUrl && httpsGitUrl !== gitUrl) {
+      console.error(`ℹ️ gitUrl 为 ssh/git 协议，已自动转为 https 提交：${httpsGitUrl}`);
+      gitUrl = httpsGitUrl;
+      gitUrlChanged = true;
+    }
+  }
+  // 仅在 gitUrl 与 Step 2 已放行的 safeUrl 不一致时重跑 A3 红线检查（与旧行为一致，避免多余网络阻断）
+  if (gitUrl && (gitUrlChanged || gitUrl !== safeUrl)) {
     const chk = checkGitUrlRemote(gitUrl);
     if (!chk.ok) {
       if (chk.raw) relay(chk.raw);
       fail(`gitUrl 未通过红线检查：${chk.reason}`);
     }
+    if (chk.gitUrl) gitUrl = chk.gitUrl;
   }
   console.error(`gitUrl=${gitUrl}`);
   console.error(`gitBranch=${gitBranch}`);

@@ -88,11 +88,24 @@ try {
   process.exit(1);
 }
 
-// 剥凭证 + 硬校验（与 read-git-info/strip-git-credential 同语义）
+// 剥凭证 + ssh/git→https 自动派生 + 硬校验（与 read-git-info/strip-git-credential 同语义）
+// 本地扩展：origin 为 ssh/git 协议时自动派生成 https 形态，避免"须 https:// 开头"误拦（A3 只接受 https）
+function sshToHttps(url) {
+  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+\.git)$/);
+  if (m) {
+    const pathPart = m[2].replace(/^[^@\s/]*@/, "");
+    return `https://${m[1]}/${pathPart}`;
+  }
+  m = url.match(/^(?:ssh|git):\/\/(?:[^@\s/]+@)?([^/\s:]+)(?::\d+)?\/(\S+\.git)$/);
+  if (m) return `https://${m[1]}/${m[2]}`;
+  return null;
+}
 let safeUrl = rawUrl.replace(/^(https?:\/\/)[^/@]+@/, "$1");
+const converted = sshToHttps(safeUrl);
+if (converted) safeUrl = converted;
 if (!safeUrl.startsWith("https://") || !safeUrl.endsWith(".git") || safeUrl.includes("@")) {
   console.log("#error=1");
-  console.error(`❌ gitUrl 不合规（须 https:// 开头、.git 结尾、无内嵌凭证）: ${safeUrl}`);
+  console.error(`❌ gitUrl 不合规（须 https:// 开头、.git 结尾、无内嵌凭证；ssh/git 形态会自动转为 https）: ${safeUrl}`);
   process.exit(1);
 }
 

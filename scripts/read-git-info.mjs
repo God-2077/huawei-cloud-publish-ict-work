@@ -8,7 +8,7 @@
 //   再另跑 strip-git-credential.mjs 剥离凭证、手动拼 gitUrl。本脚本一步封装：
 //     * git 仓库完整性自检（非 git 仓库 → exit 1）
 //     * 读 origin 与当前分支
-//     * 剥离内嵌凭证 + 硬校验（https://、.git 结尾、无 @）——复用 strip-git-credential 语义内联
+//     * 剥离内嵌凭证 + ssh/git 协议自动派生 https 形态 + 硬校验（https://、.git 结尾、无 @）——复用 strip-git-credential 语义内联
 //     * 远端分支核对（2026-09-25 新增，见下）
 //
 // 用法:
@@ -49,7 +49,7 @@ if (!workDir || workDir === "-h" || workDir === "--help") {
   node read-git-info.mjs <workDir>
 
 stdout:
-  #gitUrl=<https://… .git>
+  #gitUrl=<https://… .git>（origin 为 ssh/git 协议时自动转为 https 形态）
   #gitBranch=<分支名>
 
 退出码: 0=成功; 1=非 git 仓库 / url 校验失败 / 远端不存在该分支(#branchAbsent=1); 2=参数错误`);
@@ -97,11 +97,29 @@ try {
   process.exit(1);
 }
 
-// 凭证剥离 + 硬校验（与 strip-git-credential 同语义）：
-//   剥离 <scheme>://<user>:<pass>@（或 <scheme>://<token>@）→ 不得再含 @、必须 https:// 开头、.git 结尾
+// 凭证剥离 + ssh/git→https 自动派生 + 硬校验（与 strip-git-credential 同语义）：
+//   ① 剥离 <scheme>://<user>:<pass>@（或 <scheme>://<token>@）
+//   ② origin 为 ssh/git 协议时自动派生成 https 形态（本地扩展，上游只接受 https:// 开头）：
+//      git@<host>:<ns>/<repo>.git          → https://<host>/<ns>/<repo>.git
+//      ssh://[user[:pass]@]<host>[:port]/<ns>/<repo>.git → https://<host>/<ns>/<repo>.git
+//      git://<host>/<ns>/<repo>.git        → https://<host>/<ns>/<repo>.git
+//   ③ 校验：不得再含 @、必须 https:// 开头、.git 结尾
+//   注：② 只改变提交给平台的 gitUrl；远端分支核对仍用原 origin（ssh 凭证照旧生效）。
+function sshToHttps(url) {
+  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+\.git)$/);
+  if (m) {
+    const pathPart = m[2].replace(/^[^@\s/]*@/, "");
+    return `https://${m[1]}/${pathPart}`;
+  }
+  m = url.match(/^(?:ssh|git):\/\/(?:[^@\s/]+@)?([^/\s:]+)(?::\d+)?\/(\S+\.git)$/);
+  if (m) return `https://${m[1]}/${m[2]}`;
+  return null;
+}
 let safeUrl = rawUrl.replace(/^(https?:\/\/)[^/@]+@/, "$1");
+const converted = sshToHttps(safeUrl);
+if (converted) safeUrl = converted;
 if (!safeUrl.startsWith("https://") || !safeUrl.endsWith(".git") || safeUrl.includes("@")) {
-  console.error(`❌ gitUrl 不合规（须 https:// 开头、.git 结尾、无内嵌凭证）: ${safeUrl}`);
+  console.error(`❌ gitUrl 不合规（须 https:// 开头、.git 结尾、无内嵌凭证；ssh/git 形态会自动转为 https）: ${safeUrl}`);
   process.exit(1);
 }
 

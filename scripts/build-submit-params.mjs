@@ -88,8 +88,24 @@ for (const [k, v] of Object.entries({ out: cli.out, problemId: cli.problemId, tr
   if (!v) { console.error(`❌ 缺少必要参数 --${OPT_NAME[k]}`); console.error(help); process.exit(2); }
 }
 if (cli.workName.length > 30) { console.error("❌ workName ≤30 字符"); process.exit(2); }
+// 本地扩展：gitUrl 为 ssh/git 协议时自动派生成 https 形态（平台只接受 https://… .git），不再因 origin 是 ssh 而报错
+function sshToHttps(url) {
+  let m = url.match(/^[^@\s/]+@([^:\s/]+):(\S+\.git)$/);
+  if (m) {
+    const pathPart = m[2].replace(/^[^@\s/]*@/, "");
+    return `https://${m[1]}/${pathPart}`;
+  }
+  m = url.match(/^(?:ssh|git):\/\/(?:[^@\s/]+@)?([^/\s:]+)(?::\d+)?\/(\S+\.git)$/);
+  if (m) return `https://${m[1]}/${m[2]}`;
+  return null;
+}
+const httpsUrl = sshToHttps(cli.gitUrl) ?? cli.gitUrl.replace(/^(https?:\/\/)[^/@]+@/, "$1");
+if (httpsUrl !== cli.gitUrl) {
+  console.error(`ℹ️ gitUrl 为 ssh/git 协议，已自动转为 https 提交：${httpsUrl}`);
+  cli.gitUrl = httpsUrl;
+}
 if (!cli.gitUrl.startsWith("https://") || !cli.gitUrl.endsWith(".git") || cli.gitUrl.includes("@")) {
-  console.error(`❌ gitUrl 不合规（https:// + .git + 无凭证）: ${cli.gitUrl}`); process.exit(2);
+  console.error(`❌ gitUrl 不合规（须 https:// + .git + 无凭证；ssh/git 形态会自动转为 https）: ${cli.gitUrl}`); process.exit(2);
 }
 
 /// ---- 目标锁一致性（禁静默改投）----
