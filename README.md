@@ -54,8 +54,8 @@ node cli.mjs --help
 
 ```bash
 node cli.mjs \
-  --problem-id <id> \           # 指定赛题 ID（须配 --training-camp）
-  --problem-name <name> \       # 赛题名（配合 --problem-id 时启用目标锁定 + 交叉校验，推荐）
+  --problem-id <id> \           # 指定赛题 ID（须配 --training-camp 与 --problem-name）
+  --problem-name <name> \       # 赛题名：build-submit-params 强制必传（目标锁定 + A0 交叉校验）
   --training-camp <id> \        # 指定活动 ID
   --work-dir <path> \           # 指定作品目录（跳过候选扫描）
   --work-name <name> \          # 作品名（≤30 字符）
@@ -63,13 +63,19 @@ node cli.mjs \
   --git-branch <name> \         # 覆盖分支
   --region cn-north-4 \         # hcloud 区域
   --creds-file <json> \         # 复用已有 sts-creds.json（跳过 Step 0 的 STS 生成）
-  --yes                         # 自动确认所有确认项
-  --non-interactive             # 非交互（必须提供 --problem-id/--training-camp/--work-dir）
+  --force \                     # 显式同意改投其他赛题（目标锁冲突 / --problem-id 与 --problem-name 不一致）
+  --yes                         # 自动确认所有确认项（不含改投确认，见下）
+  --non-interactive             # 非交互（必须提供 --problem-id/--training-camp/--problem-name/--work-dir）
 ```
 
 退出码：`0` = 成功；`1` = 失败/取消；`2` = 参数错误。
 
 人机提示（进度、警告、二维码/授权链接）走 **stderr**，最终成功结果块走 **stdout**——方便脚本只取结果。
+
+> **改投（防错投红线）**：目标一旦锁定即为本次运行唯一目标，任何失败都只转述并停止。
+> 确需改投他题时须**用户显式同意**：交互式输入 `yes`，或命令行加 `--force`。
+> `--yes` 与 `--non-interactive` **都不会**自动跳过该确认——命令行指定的 `--problem-id`/`--training-camp` 与
+> `--problem-name` 解析出的目标不一致时同样需要该确认，不会静默改投。
 
 ## 目录结构
 
@@ -121,23 +127,54 @@ scripts/                原子脚本（各自可独立调用，多数支持 --he
 | `#exampleRepo=1` | 作品目录命中示例仓库红线，回到 Step 2 更换目录 |
 | `#gitAbsent=1` / `#gitNoOrigin=1` | 目录无 `.git` 或无 origin，用 `--git-url` 提供 git 地址自动初始化推送 |
 | 提示「gitUrl 须为 https:// 开头…」 | 自本版起 **origin 为 ssh/git 协议的地址会自动转为 https**（`git@host:ns/repo.git`、`ssh://git@host[:port]/ns/repo.git`、`git://host/ns/repo.git`），正常不再出现该提示；若仍出现，说明地址不是上述形态（例如本地路径、缺 `.git` 后缀、或含内嵌凭证），请改用 https 地址 |
-| `#selected-locked number=… problemId=…` | 目标锁（`.ict-target.json`，默认在 `--creds-file` 同目录）已指向其他赛题：确认改投才可加 `--force`；锁超过 900s 自动作废，也可直接删除该锁文件 |
+| `#selected-locked number=… problemId=…` | 目标锁（`.ict-target.json`，默认在 `--creds-file` 同目录）已指向其他赛题：确认改投后加 `--force`，或交互式输入 `yes`；锁超过 900s 自动作废，也可直接删除该锁文件 |
+| `--problem-id` 与 `--problem-name` 目标不一致 | CLI 会列出差异并要求显式改投确认（`--force` 或输入 `yes`）；核对两者是否指向同一赛题 |
+| 提示「缺少赛题名（--problem-name）」 | `build-submit-params` 强制必传 `--problem-name`（目标锁 + A0 交叉校验）：非交互模式必须显式提供，交互式会当场询问 |
 | `--problem-name` 不一致 / `PROBLEM_UNAVAILABLE` | 目标锁或 A0 校验拒绝构建参数：回 Step 1 重新选择赛题，**不要改投到其他赛题** |
 | 提交非 201 | 按 [`references/ict-error-codes.md`](references/ict-error-codes.md) 对应错误码处理 |
 | 提示「技能已过时」（`status=outdated`） | 平台按 `SKILL.md` frontmatter 的 `metadata.version` 比对。官方升级命令：`npx skills add https://gitcode.com/Lingxi-HandsOn/gallery.git --skill huawei-cloud-publish-ict-work -y` |
 
 ## 版本与上游同步
 
-- 技能版本写在 [`SKILL.md`](SKILL.md) frontmatter 的 `metadata.version`（当前 `2026.09.30.001`），提交前
+- 技能版本写在 [`SKILL.md`](SKILL.md) frontmatter 的 `metadata.version`（当前 `2026.10.09.001`），提交前
   [`cli.mjs`](cli.mjs) 会调 `scripts/check-version.mjs` 向平台确认；平台判定过时则**拦截提交**。
 - 上游源：`https://gitcode.com/Lingxi-HandsOn/gallery.git` 的 `skills/huawei-cloud-publish-ict-work/`。
 - 本目录 = 上游技能文件 + 本地扩展（`cli.mjs`、`scripts/init-git-remote.mjs`、`README.md`、`LICENSE`）。
-  同步上游时按文件整体覆盖，并保留 `check-ict-git-repo.mjs` 的 `#gitNoOrigin=1` 分支与 `SKILL.md`
-  中对应的两处本地扩展说明（上游 2026-09-30 起已将该场景并入 `#error=1`）。
+  同步上游时按文件整体覆盖，并保留以下本地扩展：
+  - `check-ict-git-repo.mjs` 的 `#gitNoOrigin=1` 分支，以及 `SKILL.md` 中对应的契约行 + Step 2.4 说明
+    （上游 2026-09-30 起已将该场景并入 `#error=1`）；
+  - ssh/git → https 自动派生（`read-git-info.mjs`、`strip-git-credential.mjs`、`build-submit-params.mjs`）
+    及 `SKILL.md` 中对应的契约行 + Step 3.2 说明；
+  - `SKILL.md` 契约表中的 `init-git-remote.mjs` 行。
+- **最近一次同步（2026-10-11，对齐上游 `master` @ `ab98e2cb`，版本 `2026.10.09.001`）**：
+  上游自 2026-09-30 起对本技能**只改了文档、未动任何脚本契约**：
+  ① 术语统一「训练营 → 活动」（`SKILL.md` + `references/ict-competition-rules.md`，
+  `trainingCampId` 等平台 API 契约不变）；
+  ② `SKILL.md` 精简去掉 2 行底层工具契约行（`ensure-user-bindir.mjs` / `ensure-user-tool.mjs`，
+  脚本本身仍随包发布）；
+  ③ 版本号 → `2026.10.09.001`。
+  同步后上游 27 个文件中 **22 个逐字节一致**；余下 5 个（`SKILL.md` +
+  `scripts/build-submit-params.mjs`、`check-ict-git-repo.mjs`、`read-git-info.mjs`、`strip-git-credential.mjs`）
+  均为「上游原文 + 本地扩展」，差异即上面列出的 `#gitNoOrigin=1` 与 ssh/git→https 派生。
+  同期修复了 `cli.mjs` 的 3 处本地缺陷（详见下方「本次本地修复」）。
+
+## 本次本地修复（`cli.mjs`）
+
+随本次上游同步一并修复（均属本地编排层缺陷，与上游脚本契约无关）：
+
+1. **`--force` 是死代码**：`FLAGS.forceSelect` 只被程序内部置位，`parseArgs` 从未解析 `--force`，
+   命令行传 `--force` 会被判为「未知参数」并以 exit 2 退出。现已支持该选项（也是改投的唯一命令行授权方式）。
+2. **非交互模式必然失败**：`build-submit-params.mjs` 强制必传 `--problem-name`，而旧 CLI 只要求
+   `--problem-id`/`--training-camp`/`--work-dir`，缺 `--problem-name` 时会「跳过目标锁定」一路走到 Step 4
+   才以「缺少必要参数 --problem-name」失败。现：非交互模式提前要求 `--problem-name`；
+   交互式在列表可用时当场询问补全；仍取不到则在 Step 1 结束处 fail-fast 并给出可执行指引。
+3. **可静默改投**：`--problem-id`/`--training-camp` 与 `--problem-name` 解析出的目标不一致时，旧 CLI 直接
+   采用名称解析结果；且 `--yes` 会让目标锁冲突的确认自动通过。现两者都走**改投确认**：只有显式 `--force`
+   或交互输入 `yes` 才放行，`--yes`/`--non-interactive` 不再自动同意，杜绝静默改投。
 
 ## 与「普通投稿陈列馆」的区别
 
-本工具**仅用于 ICT 大赛 AI 赛题的作品提交与判题**。普通陈列馆/训练营投稿（无竞赛上下文）请使用 `huawei-cloud-publish-work-to-gallery`。
+本工具**仅用于 ICT 大赛 AI 赛题的作品提交与判题**。普通陈列馆/活动投稿（无竞赛上下文）请使用 `huawei-cloud-publish-work-to-gallery`。
 
 ## License
 

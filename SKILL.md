@@ -7,11 +7,11 @@ description: |
   Use this skill whenever the user wants to push, submit, or upload work to the ICT competition — casual phrasings like
   "提交大赛作品", "推送ICT赛题作品", "把作品投到ICT大赛", "提交AI赛题去判题", as well as formal ones like
   "submit ICT competition work", "publish AI problem solution to the contest", "push work for judging".
-  Do NOT use for regular gallery publishing (投稿陈列馆/训练营 without competition context) — use huawei-cloud-publish-work-to-gallery.
+  Do NOT use for regular gallery publishing (投稿陈列馆/活动 without competition context) — use huawei-cloud-publish-work-to-gallery.
   Do NOT use for judging itself, viewing scores/ranking, or platform browsing without submit intent.
 metadata:
   tags: huawei-cloud,ict-competition,ai-problem,submit,gallery,university operations platform
-  version: 2026.09.30.001
+  version: 2026.10.09.001
 ---
 
 # Publish ICT Competition Work
@@ -53,8 +53,6 @@ Step 0 (domainID, STS creds) → Step 1 (problemId, trainingCampId, window) → 
 | 3 | `ensure-gitcode-credential.mjs` | `#credential=found`（有凭证）或 `#credential=missing`（无凭证，走 OAuth） | exit 0；无手动备选 |
 | 3 | `gitcode-oauth.ensure.mjs --start` | `#oauth=ready`（有 token）/ `#oauth=started session_id=<id> login_url=<url>`（stdout 立即返回，二维码走 stderr） | 缺失 `#oauth=absent` exit 1；失败 `#oauth=failed reason=…` exit 1 |
 | 3 | `gitcode-oauth.ensure.mjs --wait <session_id> [--timeout <秒>]` | `#oauth=done`（token 已写 `~/.gitcode/auth.toml`） | `#oauth=failed reason=timeout\|finish\|…` exit 1 |
-| 前置 | `ensure-user-bindir.mjs` | `#bindir=<abs> level=…`（选定+创建用户级工具目录并写 PATH）；`--print-path` 输出用户 PATH 原始串 | exit 1=无可写目录 |
-| 前置 | `ensure-user-tool.mjs --tool gitcode-oauth` | `#tool=gitcode-oauth path=<abs> source=cache\|path\|probe\|bindir\|installed`；`--print [--tool <t>]` 读 `tools-index.json` | exit 1=解析/安装失败 |
 | 3 | `extract-workname.mjs <workDir>` | `#name=<name> source=<来源>` | exit 1=workDir 不存在 |
 | 4 | `build-submit-params.mjs --out … --problem-id … --training-camp … --problem-name <name> --work-name … --git-url … --git-branch … --creds <sts-creds.json>` | `#params=<absPath>`（注入 STS 凭证 + 自动 Idempotency-Key；已通过目标锁一致性 + A0 校验 ID↔赛题名/活动） | exit 1=creds 缺失/A0 校验失败；exit 2=参数错/锁不一致/名称或活动不匹配 |
 | 4 | `submit-ict-work.mjs <utf8-params.json>` | `#status=201`（输出 submissionId/attemptNo/judgeStatus/workId/workUrl） | 409/403 等失败 → 原样输出完整响应 |

@@ -19,7 +19,7 @@
 ## 三、实验窗口与重提规则
 
 - **实验有效完成窗口**：2026-09-18 00:00 ~ 2026-11-08 24:00（+08:00）。提交/重提须在窗口内；截止后拒绝（`WINDOW_EXPIRED`）。
-- **AI 题一题一活动**：每个 AI 题对应一个 gallery 训练营活动（`theme=ict_competition`），提交时 `trainingCampId` 必须由 A0 按 `problemId` 取得并一致（`CAMP_MISMATCH` 防错挂）。
+- **AI 题一题一活动**：每个 AI 题对应一个 gallery 活动（`theme=ict_competition`），提交时 `trainingCampId` 必须由 A0 按 `problemId` 取得并一致（`CAMP_MISMATCH` 防错挂）。
 - **重提**：判题**未通过**允许不限次重提（窗口内），`attemptNo` 递增；判题**通过即终态**不可再提交（`ALREADY_PASSED`）；判题**中**不可重复提交（`JUDGING`）。
 - **计分**：固定每题 20 分，通过与否只由判题结果决定（与质量/用时无关）。
 
@@ -38,7 +38,7 @@
 
 | 维度 | huawei-cloud-publish-work-to-gallery | 本 skill（huawei-cloud-publish-ict-work） |
 |------|------------------------|------------------------------|
-| 目标 | 陈列馆/训练营普通作品投稿 | ICT 大赛 AI 赛题提交（判题闭环） |
+| 目标 | 陈列馆/活动普通作品投稿 | ICT 大赛 AI 赛题提交（判题闭环） |
 | 活动来源 | 用户从 camps 列表自选 | A0 按 problemId 自动确定 |
 | 终态语义 | pending_review → 人工审核 | pending → 异步判题 |
 | 积分 | 有（每日限一次） | **无**（2026-09-17 白名单机制移除，A1 不领取积分；积分领取仅普通作品发布通道） |

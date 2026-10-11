@@ -9,8 +9,9 @@
 //   node cli.mjs [选项]
 //
 // 选项（可选，缺省全部交互式提问）:
-//   --problem-id <id>       指定赛题 ID（须配 --training-camp）
-//   --problem-name <name>   指定赛题名（配合 --problem-id 时用于目标锁定与交叉校验）
+//   --problem-id <id>       指定赛题 ID（须配 --training-camp 与 --problem-name）
+//   --problem-name <name>   指定赛题名：build-submit-params 强制必传（目标锁一致性 + A0 ID↔赛题名/活动
+//                           交叉校验），故交互式会自动取得、非交互式必须显式提供
 //   --training-camp <id>    指定活动 ID
 //   --work-dir <path>       指定作品目录（跳过候选扫描）
 //   --work-name <name>      指定作品名（≤30 字符）
@@ -20,8 +21,9 @@
 //   --region <r>            hcloud 区域（默认 cn-north-4）
 //   --hcloud <exe>          hcloud 可执行文件路径
 //   --creds-file <json>     复用已有 sts-creds.json（跳过 Step 0 的 STS 生成）
-//   --yes                   自动确认所有确认项
-//   --non-interactive       非交互（必须提供 --problem-id/--training-camp/--work-dir）
+//   --force                 显式同意改投其他赛题（覆盖目标锁冲突 / --problem-id 与 --problem-name 不一致）
+//   --yes                   自动确认所有确认项（**不含改投确认**——防错投红线须显式 --force 或输入 yes）
+//   --non-interactive       非交互（必须提供 --problem-id、--training-camp、--problem-name、--work-dir）
 //   -h, --help              显示帮助
 //
 // 人机提示走 stderr；最终成功结果块走 stdout。
@@ -68,8 +70,9 @@ const HELP = `cli.mjs — ICT 大赛作品提交 · 交互式 CLI
   node cli.mjs [选项]
 
 选项（缺省全部交互式提问）:
-  --problem-id <id>       指定赛题 ID（须配 --training-camp；赛题列表行已不再输出 ID）
-  --problem-name <name>   指定赛题名（配合 --problem-id 时用于目标锁定与交叉校验，推荐）
+  --problem-id <id>       指定赛题 ID（须配 --training-camp 与 --problem-name；赛题列表行已不再输出 ID）
+  --problem-name <name>   指定赛题名。build-submit-params 强制必传（目标锁一致性 + A0 ID↔赛题名/活动
+                          交叉校验）：交互式自动取得，非交互式必须显式提供
   --training-camp <id>    指定活动 ID
   --work-dir <path>       指定作品目录（跳过候选扫描）
   --work-name <name>      指定作品名（≤30 字符）
@@ -80,14 +83,16 @@ const HELP = `cli.mjs — ICT 大赛作品提交 · 交互式 CLI
   --region <r>            hcloud 区域（默认 cn-north-4）
   --hcloud <exe>          hcloud 可执行文件路径
   --creds-file <json>     复用已有 sts-creds.json（跳过 Step 0 的 STS 生成）
-  --yes                   自动确认所有确认项
-  --non-interactive       非交互（必须提供 --problem-id、--training-camp，以及 --work-dir）
+  --force                 显式同意改投其他赛题（目标锁冲突 / --problem-id 与 --problem-name 不一致）
+  --yes                   自动确认所有确认项（不含改投确认，见下）
+  --non-interactive       非交互（必须提供 --problem-id、--training-camp、--problem-name、--work-dir）
   -h, --help              显示帮助
 
 目标锁定:
   Step 1 选定赛题后即写目标锁（本次运行唯一目标），ID/活动/赛题名一律取自脚本回传的
-  #selected 结构化行，禁止手抄；后续任何失败都不自动改投其他赛题。改投须重新选择并经
-  用户确认（脚本层加 --force）。
+  #selected 结构化行，禁止手抄；后续任何失败都不自动改投其他赛题。
+  改投（回 Step 1 重选）须用户明确同意：交互式输入 yes，或命令行加 --force。
+  --yes / --non-interactive 都不会自动跳过该确认，防止静默改投。
 
 环境/作品要求:
   - 环境必须已配置好 \`hcloud\` 命令，或提供 \`--hcloud 可执行文件路径\` 选项。
@@ -120,6 +125,7 @@ function parseArgs(argv) {
       case "--region": FLAGS.region = next() || FLAGS.region; break;
       case "--hcloud": FLAGS.hcloud = next(); break;
       case "--creds-file": FLAGS.credsFile = next(); break;
+      case "--force": FLAGS.forceSelect = true; break;
       case "--yes": FLAGS.yes = true; break;
       case "--non-interactive": FLAGS.nonInteractive = true; break;
       default: console.error(`❌ 未知参数: ${argv[i]}\n${HELP}`); process.exit(2);
@@ -176,6 +182,21 @@ async function confirm(question, def = true) {
   const t = ans.trim().toLowerCase();
   if (!t) return def;
   return t === "y" || t === "yes";
+}
+
+// 改投确认（防错投红线）：**不接受 --yes / --non-interactive 的自动确认**，
+// 必须由用户显式给出 --force，或交互式输入 yes。任何其他情况一律视为不同意。
+async function confirmRetarget(reason) {
+  if (FLAGS.forceSelect) {
+    console.error(`⚠️ --force：${reason} — 按用户显式授权改投。`);
+    return true;
+  }
+  if (FLAGS.yes || FLAGS.nonInteractive) {
+    console.error(`⚠️ ${reason}；--yes/--non-interactive 不自动确认改投，需显式 --force。`);
+    return false;
+  }
+  const ans = await ask(`${reason}。确认改投请输入 yes（其他输入取消）`, "");
+  return ans.trim().toLowerCase() === "yes";
 }
 
 function fail(msg) {
@@ -412,14 +433,14 @@ async function ensureGitCredential() {
 async function main() {
   parseArgs(process.argv.slice(2));
   if (FLAGS.help) { console.log(HELP); process.exit(0); }
-  if (FLAGS.nonInteractive && (!FLAGS.problemId || !FLAGS.trainingCamp || !FLAGS.workDir)) {
-    fail("非交互模式必须提供 --problem-id、--training-camp、--work-dir");
+  if (FLAGS.nonInteractive && (!FLAGS.problemId || !FLAGS.trainingCamp || !FLAGS.problemName || !FLAGS.workDir)) {
+    fail("非交互模式必须提供 --problem-id、--training-camp、--problem-name、--work-dir（--problem-name 为 build-submit-params 强制必传）");
   }
 
   console.error("华为 ICT 大赛·实验赛题平台 · 作品提交交互式 CLI");
 
   // ---- 前置：技能版本检查（平台不可达不拦截） ----
-  const ver = runScript("check-version.mjs");
+  const ver = runScript("check-version.mjs", [], 30000);
   if (/status=outdated/.test(ver.stdout)) {
     console.error(ver.stdout.trim());
     fail("当前技能版本已过时，请按上方提示升级后再提交。");
@@ -492,8 +513,17 @@ async function main() {
     }
     if (problems.length && problemName) {
       selectArgs = ["--select-name", problemName, "--creds-file", credsFile, "--lock-file", lockFile];
+    } else if (problems.length) {
+      // 列表可用但命令行未给赛题名：build-submit-params 强制必传，交互式请用户当场补充
+      if (!FLAGS.nonInteractive) {
+        problemName = await ask(`请输入赛题名（--problem-id=${problemId} 对应的赛题名，用于目标锁定 + A0 交叉校验）`, "");
+        if (problemName) selectArgs = ["--select-name", problemName, "--creds-file", credsFile, "--lock-file", lockFile];
+      }
+      if (!selectArgs) {
+        console.error("⚠️ 未取得赛题名：build-submit-params 强制必传 --problem-name，本次运行将停止。");
+      }
     } else {
-      console.error("⚠️ 未提供 --problem-name（或赛题列表不可用）：跳过目标锁定与赛题名交叉校验，仅用命令行传入的 problemId/trainingCampId。");
+      console.error("⚠️ 赛题列表不可用：无法写目标锁，仅用命令行传入的 problemId/trainingCampId/problemName。");
     }
   } else {
     if (FLAGS.nonInteractive) fail("非交互模式必须提供 --problem-id 与 --training-camp。");
@@ -515,6 +545,19 @@ async function main() {
       const sel = runScript("list-problems.mjs", args, 30000);
       const picked = parseSelected(sel.stdout);
       if (picked) {
+        // 防错投：命令行给了 problemId/trainingCampId 时，必须与「赛题名解析出的目标」一致；
+        // 不一致不得静默改投，须用户显式同意（--force 或交互输入 yes）。
+        const conflicts = [];
+        if (FLAGS.problemId && picked.problemId !== FLAGS.problemId) {
+          conflicts.push(`problemId ${FLAGS.problemId} → ${picked.problemId}`);
+        }
+        if (FLAGS.trainingCamp && picked.trainingCampId && picked.trainingCampId !== FLAGS.trainingCamp) {
+          conflicts.push(`trainingCampId ${FLAGS.trainingCamp} → ${picked.trainingCampId}`);
+        }
+        if (conflicts.length) {
+          const reason = `命令行指定目标与赛题名「${picked.name}」解析结果不一致（${conflicts.join("；")}）`;
+          if (!(await confirmRetarget(reason))) fail("已取消（未改投）。禁止静默改投其他赛题。");
+        }
         problemId = picked.problemId;
         trainingCampId = picked.trainingCampId || trainingCampId;
         problemName = picked.name || problemName;
@@ -525,9 +568,8 @@ async function main() {
       if (/#selected-locked/.test(sel.stdout)) {
         const locked = sel.stdout.match(/#selected-locked[^\n]*/)?.[0] || "";
         if (locked) console.error(locked);
-        if (FLAGS.nonInteractive) fail("目标锁指向其他赛题；非交互模式不会自动改投，请清理目标锁后重试。");
-        if (!(await confirm("目标锁指向其他赛题，是否改投到本次所选赛题？", false))) {
-          fail("已取消（未改投）。禁止静默改投其他赛题。");
+        if (!(await confirmRetarget(`目标锁指向其他赛题（${lockFile}）`))) {
+          fail("已取消（未改投）。禁止静默改投其他赛题；确需改投请加 --force 或交互输入 yes。");
         }
         FLAGS.forceSelect = true;
         continue;
@@ -537,6 +579,11 @@ async function main() {
       fail("目标锁定失败（未取得 #selected 结构化行），请检查赛题列表与凭证后重试。");
     }
     console.error(`本次目标：序号 ${targetNumber || "?"}／赛题「${problemName}」／problemId=${problemId} — 本步骤起目标即锁定，后续失败不自动改投。`);
+  }
+  // build-submit-params 强制必传 --problem-name（目标锁一致性 + A0 ID↔赛题名/活动交叉校验）：
+  // 未取得则此处 fail-fast，避免到 Step 4 才以「缺少必要参数 --problem-name」的形式失败。
+  if (!problemName) {
+    fail("缺少赛题名（--problem-name）。build-submit-params 强制必传，用于目标锁一致性 + A0 ID↔赛题名/活动交叉校验；非交互模式请显式提供 --problem-name。");
   }
   console.error(`已选择赛题：problemId=${problemId} trainingCampId=${trainingCampId}${problemName ? ` name=${problemName}` : ""}`);
 
@@ -635,10 +682,10 @@ async function main() {
       "--git-branch", gitBranch,
       "--creds", credsFile,
       "--lock-file", lockFile,
+      // --problem-name 为上游强制必传（目标锁一致性 + A0 ID↔赛题名/活动交叉校验）；
+      // 上面已保证 problemName 非空，故此处始终传入。
+      "--problem-name", problemName,
     ];
-    // --problem-name 为上游必填（目标锁一致性 + A0 ID↔赛题名/活动交叉校验）；
-    // 仅在「列表不可用且未提供 --problem-name」的逃生路径下省略。
-    if (problemName) bpArgs.push("--problem-name", problemName);
     const bp = runScript("build-submit-params.mjs", bpArgs, 20000);
     if (bp.code !== 0) {
       relay(bp.stderr);
